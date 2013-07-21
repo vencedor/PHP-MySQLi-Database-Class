@@ -1,14 +1,13 @@
 <?php
 /**
- * MysqliDb Class
+ * MysqliDb to PDO Class
  *
  * @category  Database Access
- * @package   MysqliDb
- * @author    Jeffery Way <jeffrey@jeffrey-way.com>
- * @author    Josh Campbell <jcampbell@ajillion.com>
- * @copyright Copyright (c) 2010
+ * @package   PDO
+ * @author    Georgi Nikolov <georgi.data@gmail.com>
+ * @copyright Copyright (c) 2013
  * @license   http://opensource.org/licenses/gpl-3.0.html GNU Public License
- * @version   1.1
+ * @version   1.0
  **/
 class MysqliDb
 {
@@ -23,7 +22,7 @@ class MysqliDb
      *
      * @var mysqli
      */
-    protected $_mysqli;
+    protected $_pdo;
     /**
      * The SQL query to be prepared and executed
      *
@@ -63,15 +62,9 @@ class MysqliDb
      * @param int $port
      */
     public function __construct($host, $username, $password, $db, $port = NULL)
-    {
-        if($port == NULL)
-            $port = ini_get('mysqli.default_port');
-        
-        $this->_mysqli = new mysqli($host, $username, $password, $db, $port)
-            or die('There was a problem connecting to the database');
-
-        $this->_mysqli->set_charset('utf8');
-
+    {        
+        $this->_pdo = new PDO("mysql:host=$host;dbname=$db;charset=utf8", $username, $password, array(PDO::ATTR_EMULATE_PREPARES => false,PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION));
+        $this->_pdo->exec("set names utf8");
         self::$_instance = $this;
     }
 
@@ -99,8 +92,6 @@ class MysqliDb
         $this->_where = array();
         $this->_bindParams = array(''); // Create the empty 0 index
         unset($this->_query);
-        unset($this->_whereTypeList);
-        unset($this->_paramTypeList);
     }
 
     /**
@@ -113,21 +104,9 @@ class MysqliDb
      */
     public function rawQuery($query, $bindParams = null)
     {
-        $this->_query = filter_var($query, FILTER_SANITIZE_STRING);
+        $this->_query = $query;
         $stmt = $this->_prepareQuery();
-
-        if (is_array($bindParams) === true) {
-            $params = array(''); // Create the empty 0 index
-            foreach ($bindParams as $prop => $val) {
-                $params[0] .= $this->_determineType($val);
-                array_push($params, $bindParams[$prop]);
-            }
-
-            call_user_func_array(array($stmt, 'bind_param'), $this->refValues($params));
-
-        }
-
-        $stmt->execute();
+        $stmt->execute($bindParams);
         $this->reset();
 
         return $this->_dynamicBindResults($stmt);
@@ -142,9 +121,9 @@ class MysqliDb
      */
     public function query($query, $numRows = null)
     {
-        $this->_query = filter_var($query, FILTER_SANITIZE_STRING);
+        $this->_query = $query;
         $stmt = $this->_buildQuery($numRows);
-        $stmt->execute();
+        $stmt->execute(array_values($this->_where));
         $this->reset();
 
         return $this->_dynamicBindResults($stmt);
@@ -162,7 +141,7 @@ class MysqliDb
     {
         $this->_query = "SELECT * FROM $tableName";
         $stmt = $this->_buildQuery($numRows);
-        $stmt->execute();
+        $stmt->execute(array_values($this->_where));
         $this->reset();
 
         return $this->_dynamicBindResults($stmt);
@@ -179,10 +158,10 @@ class MysqliDb
     {
         $this->_query = "INSERT into $tableName";
         $stmt = $this->_buildQuery(null, $insertData);
-        $stmt->execute();
+        $stmt->execute(array_values($insertData));
         $this->reset();
 
-        return ($stmt->affected_rows > 0 ? $stmt->insert_id : false);
+        return ($stmt->rowCount() > 0 ? $this->getInsertId() : false);
     }
 
     /**
@@ -196,12 +175,17 @@ class MysqliDb
     public function update($tableName, $tableData)
     {
         $this->_query = "UPDATE $tableName SET ";
-
+        if( is_array($tableData) ){
+            $exec_params=array_merge(array_values($tableData),array_values($this->_where));
+        }else{
+            $exec_params=array_values($this->_where);
+        }
         $stmt = $this->_buildQuery(null, $tableData);
-        $stmt->execute();
+
+        $stmt->execute($exec_params);
         $this->reset();
 
-        return ($stmt->affected_rows > 0);
+        return ($stmt->rowCount() > 0);
     }
 
     /**
@@ -217,10 +201,10 @@ class MysqliDb
         $this->_query = "DELETE FROM $tableName";
 
         $stmt = $this->_buildQuery($numRows);
-        $stmt->execute();
+        $stmt->execute(array_values($this->_where));
         $this->reset();
 
-        return ($stmt->affected_rows > 0);
+        return ($stmt->rowCount() > 0);
     }
 
     /**
@@ -247,7 +231,7 @@ class MysqliDb
      */
     public function getInsertId()
     {
-        return $this->_mysqli->insert_id;
+        return $this->_pdo->lastInsertId(); 
     }
 
     /**
@@ -259,41 +243,9 @@ class MysqliDb
      */
     public function escape($str)
     {
-        return $this->_mysqli->real_escape_string($str);
+        return $this->_pdo->quote($str);
     }
 
-    /**
-     * This method is needed for prepared statements. They require
-     * the data type of the field to be bound with "i" s", etc.
-     * This function takes the input, determines what type it is,
-     * and then updates the param_type.
-     *
-     * @param mixed $item Input to determine the type.
-     *
-     * @return string The joined parameter types.
-     */
-    protected function _determineType($item)
-    {
-        switch (gettype($item)) {
-            case 'NULL':
-            case 'string':
-                return 's';
-                break;
-
-            case 'integer':
-                return 'i';
-                break;
-
-            case 'blob':
-                return 'b';
-                break;
-
-            case 'double':
-                return 'd';
-                break;
-        }
-        return '';
-    }
 
     /**
      * Abstraction method that will compile the WHERE statement,
@@ -318,9 +270,6 @@ class MysqliDb
                 $pos = strpos($this->_query, 'UPDATE');
                 if ($pos !== false) {
                     foreach ($tableData as $prop => $value) {
-                        // determines what data type the item is, for binding purposes.
-                        $this->_paramTypeList .= $this->_determineType($value);
-
                         // prepares the reset of the SQL query.
                         $this->_query .= ($prop . ' = ?, ');
                     }
@@ -331,9 +280,6 @@ class MysqliDb
             //Prepair the where portion of the query
             $this->_query .= ' WHERE ';
             foreach ($this->_where as $column => $value) {
-                // Determines what data type the where column is, for binding purposes.
-                $this->_whereTypeList .= $this->_determineType($value);
-
                 // Prepares the reset of the SQL query.
                 $this->_query .= ($column . ' = ? AND ');
             }
@@ -353,7 +299,6 @@ class MysqliDb
                 // wrap values in quotes
                 foreach ($values as $key => $val) {
                     $values[$key] = "'{$val}'";
-                    $this->_paramTypeList .= $this->_determineType($val);
                 }
 
                 $this->_query .= '(' . implode($keys, ', ') . ')';
@@ -377,7 +322,6 @@ class MysqliDb
 
         // Prepare table data bind parameters
         if ($hasTableData) {
-            $this->_bindParams[0] = $this->_paramTypeList;
             foreach ($tableData as $prop => $val) {
                 array_push($this->_bindParams, $tableData[$prop]);
             }
@@ -385,15 +329,10 @@ class MysqliDb
         // Prepare where condition bind parameters
         if ($hasConditional) {
             if ($this->_where) {
-                $this->_bindParams[0] .= $this->_whereTypeList;
                 foreach ($this->_where as $prop => $val) {
                     array_push($this->_bindParams, $this->_where[$prop]);
                 }
             }
-        }
-        // Bind parameters to statment
-        if ($hasTableData || $hasConditional) {
-            call_user_func_array(array($stmt, 'bind_param'), $this->refValues($this->_bindParams));
         }
 
         return $stmt;
@@ -407,27 +346,11 @@ class MysqliDb
      *
      * @return array The results of the SQL fetch.
      */
-    protected function _dynamicBindResults(mysqli_stmt $stmt)
+    protected function _dynamicBindResults(PDOStatement $stmt)
     {
-        $parameters = array();
         $results = array();
-
-        $meta = $stmt->result_metadata();
-
-        $row = array();
-        while ($field = $meta->fetch_field()) {
-            $row[$field->name] = null;
-            $parameters[] = & $row[$field->name];
-        }
-
-        call_user_func_array(array($stmt, 'bind_result'), $parameters);
-
-        while ($stmt->fetch()) {
-            $x = array();
-            foreach ($row as $key => $val) {
-                $x[$key] = $val;
-            }
-            array_push($results, $x);
+        while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $results[]=$row;
         }
         return $results;
     }
@@ -440,8 +363,8 @@ class MysqliDb
      */
     protected function _prepareQuery()
     {
-        if (!$stmt = $this->_mysqli->prepare($this->_query)) {
-            trigger_error("Problem preparing query ($this->_query) " . $this->_mysqli->error, E_USER_ERROR);
+        if (!$stmt = $this->_pdo->prepare($this->_query)) {
+            trigger_error("Problem preparing query ($this->_pdo) " . $this->_pdo->errorInfo(), E_USER_ERROR);
         }
         return $stmt;
     }
@@ -451,25 +374,7 @@ class MysqliDb
      */
     public function __destruct()
     {
-        $this->_mysqli->close();
-    }
-
-    /**
-     * @param array $arr
-     *
-     * @return array
-     */
-    protected function refValues($arr)
-    {
-        //Reference is required for PHP 5.3+
-        if (strnatcmp(phpversion(), '5.3') >= 0) {
-            $refs = array();
-            foreach ($arr as $key => $value) {
-                $refs[$key] = & $arr[$key];
-            }
-            return $refs;
-        }
-        return $arr;
+        $this->_pdo=null;
     }
 
 } // END class
