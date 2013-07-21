@@ -18,7 +18,7 @@ class MysqliDb
      */
     protected static $_instance;
     /**
-     * MySQLi instance
+     * PDO instance
      *
      * @var mysqli
      */
@@ -342,7 +342,7 @@ class MysqliDb
      * This helper method takes care of prepared statements' "bind_result method
      * , when the number of variables to pass is unknown.
      *
-     * @param mysqli_stmt $stmt Equal to the prepared statement object.
+     * @param PDOStatement $stmt Equal to the prepared statement object.
      *
      * @return array The results of the SQL fetch.
      */
